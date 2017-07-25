@@ -1,7 +1,7 @@
 # TransIP Dynamic DNS script
 This script can be used to autmatically update the DNS entries of one or more domains when a dynamic IP address
-is changed. This script should be run on the server that the DNS entries should point to. It should *not* be served
-by a webserver! That is, *don't* put this in your `htdocs` or `www` folder or whatever.
+is changed. This script should be run on the server that the DNS entries should point to. It should **not** be served
+by a webserver! That is, **don't** put this in your `htdocs` or `www` folder or whatever.
 
 When you use this script, it is advisable to set the Time To Live (TTL) of your DNS records to 1 hour to limit the
 amount of downtime when the address changes.
@@ -16,7 +16,7 @@ amount of downtime when the address changes.
    (After change to un unknown dynamic ip, this new ip is not in the whitelist!)
 3. Copy-and-paste the generated private key into the definition of PRIVATE_KEY in the `dyndns.php` script.
 4. Change the definitions of DOMAINS and USERNAME to match your domain names and TransIP username.
-5. *Change access to the script file*, so it can't be accessable from outside. *You don't want to leak your details!!!*
+5. **Change access to the script file**, so it can't be accessable from outside. **You don't want to leak your details!!!**
 6. Call `dyndns.php` script on the command line whenever you want the DNS to be automatically updated. You can use
    `cron` to do this periodically for you.
 
