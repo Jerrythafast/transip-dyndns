@@ -165,7 +165,7 @@ if __name__ == "__main__":
                 update = True
             if update:
                 try:
-                    request_patch("domains/%s/dns" % domain["name"], token, entry)
+                    request_patch("domains/%s/dns" % domain, token, entry)
                 except Exception as ex:
                     print_message("WARNING: Could not update DNS config for %s with %r. %s" % (domain, entry, format_exception(ex)))
                     continue
