@@ -81,7 +81,6 @@ def request_patch(endpoint, token, data):
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
         timeout=TIMEOUT)
     resps.raise_for_status()
-    return resps.json()
 
 
 if __name__ == "__main__":
@@ -165,7 +164,7 @@ if __name__ == "__main__":
                 update = True
             if update:
                 try:
-                    request_patch("domains/%s/dns" % domain, token, entry)
+                    request_patch("domains/%s/dns" % domain, token, {"dnsEntry": entry})
                 except Exception as ex:
                     print_message("WARNING: Could not update DNS config for %s with %r. %s" % (domain, entry, format_exception(ex)))
                     continue
