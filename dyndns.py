@@ -1,176 +1,347 @@
-#!/usr/bin/env python
-PRIVATE_KEY = """
------BEGIN PRIVATE KEY-----
-copy-and-paste your private key here. don't forget to restrict access to this file!!!
------END PRIVATE KEY-----"""
-LOGIN = "username"
-LABEL = "DynDNS30s"
-TIMEOUT = 10.
-DOMAIN_MAIN_ENTRY = {"mydomain.nl": "*", "myseconddomain.nl": "@"}
+#!/usr/bin/env python3
 
-
-# pip install cryptography requests
+import argparse
 import base64
-import cryptography.hazmat.primitives.asymmetric.padding
-import cryptography.hazmat.primitives.hashes
-import cryptography.hazmat.primitives.serialization
+import ipaddress
 import json
-import re
-import requests
+import logging
+import secrets
 import sys
-import time
+from ipaddress import IPv4Address, IPv6Address
+from typing import Optional, TypeVar, TextIO
+
+import requests
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+from cryptography.hazmat.primitives.hashes import SHA512
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 
-# This is used to check whether the specified IP address is valid.
-# The IPv6 one comes from https://stackoverflow.com/a/17871737 (28 February 2016).
-IPV4_REGEX = re.compile("^((25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9]?[0-9])$")
-IPV6_REGEX = re.compile("^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$")
+LOG_FORMAT = "%(levelname)s %(message)s"
+LOG_LEVEL = logging.INFO
+IPV4_UNSPECIFIED = IPv4Address("0.0.0.0")
+IPV6_UNSPECIFIED = IPv6Address("::")
+IPV4_IDENT_URLS = (
+    "https://v4.ident.me",
+    "https://api4.ipify.org",
+)
+IPV6_IDENT_URLS = (
+    "https://v6.ident.me",
+    "https://api6.ipify.org",
+)
+TRANSIP_API_URL = "https://api.transip.nl/v6"
+REQUEST_TIMEOUT = 10.0
+
+AddressT = TypeVar("AddressT", IPv4Address, IPv6Address)
+
+logger = logging.getLogger("transip-dyndns")
 
 
-def format_exception(ex):
-    return "%s: %s" % (type(ex).__name__, ex)
-
-def print_message(message):
-    """Write message to stderr, along with a timestamp."""
-    sys.stderr.write("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), message))
+def get_nonce() -> str:
+    return secrets.token_hex(16)
 
 
-try:
-    import secrets
-    def get_nonce():
-        return secrets.token_hex(16)
-except ImportError:
-    import os
-    def get_nonce():
-        return os.urandom(16).hex()
-
-def encode_json(data):
+def encode_json(data: dict) -> bytes:
     return json.dumps(data).encode("ascii")
 
-def sign_message(binary_message):
-    return base64.b64encode(cryptography.hazmat.primitives.serialization.load_pem_private_key(
-        PRIVATE_KEY.strip().encode("ascii"), password=None).sign(binary_message,
-        padding=cryptography.hazmat.primitives.asymmetric.padding.PKCS1v15(),
-        algorithm=cryptography.hazmat.primitives.hashes.SHA512()))
 
-def request_token():
-    request_body = encode_json({
-        "login": LOGIN,
-        "nonce": get_nonce(),
-        "read_only": False,
-        "expiration_time": "30 seconds",
-        "label": LABEL,
-        "global_key": True})
-    resps = requests.post("https://api.transip.nl/v6/auth",
+def sign_message(binary_message: bytes, private_key: TextIO) -> bytes:
+    return load_pem_private_key(
+        private_key.read().strip().encode("ascii"),
+        password=None,
+    ).sign(binary_message, padding=PKCS1v15(), algorithm=SHA512())
+
+
+def get_access_token(label: str, username: str, private_key: TextIO) -> str:
+    request_body: bytes = encode_json(
+        {
+            "login": username,
+            "nonce": get_nonce(),
+            "read_only": False,
+            "expiration_time": "30 seconds",
+            "label": label,
+            "global_key": True,
+        }
+    )
+    response = requests.post(
+        f"{TRANSIP_API_URL}/auth",
         data=request_body,
-        headers={"Content-Type": "application/json", "Signature": sign_message(request_body)},
-        timeout=TIMEOUT)
-    resps.raise_for_status()
-    return resps.json()["token"]
+        headers={
+            "Content-Type": "application/json",
+            "Signature": base64.b64encode(sign_message(request_body, private_key)),
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()["token"]
 
-def request_get(endpoint, token):
-    resps = requests.get("https://api.transip.nl/v6/" + endpoint,
-        headers={"Authorization": "Bearer " + token},
-        timeout=TIMEOUT)
-    resps.raise_for_status()
-    return resps.json()
 
-def request_patch(endpoint, token, data):
-    resps = requests.patch("https://api.transip.nl/v6/" + endpoint,
+def transip_request_get(endpoint: str, token: str) -> dict:
+    response = requests.get(
+        f"{TRANSIP_API_URL}/{endpoint}",
+        headers={
+            "Authorization": f"Bearer {token}",
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def transip_request_patch(endpoint: str, token: str, data: dict) -> None:
+    response = requests.patch(
+        f"{TRANSIP_API_URL}/{endpoint}",
         data=encode_json(data),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + token},
-        timeout=TIMEOUT)
-    resps.raise_for_status()
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+
+
+def determine_ip_address(address_type: type[AddressT]) -> Optional[AddressT]:
+    if address_type == IPv4Address:
+        identify_urls = IPV4_IDENT_URLS
+        version = 4
+    else:
+        identify_urls = IPV6_IDENT_URLS
+        version = 6
+
+    last_exc: Exception | None = None
+
+    for url in identify_urls:
+        try:
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            value = response.text.strip()
+            return address_type(value)
+        except requests.RequestException as exc:
+            last_exc = exc
+            logger.info(
+                f"Failed to determine IPv{version} address using {url}, skipping"
+            )
+        except ipaddress.AddressValueError as exc:
+            last_exc = exc
+            logger.info(f"Got invalid response from {url}, skipping")
+
+    if last_exc is not None:
+        logger.exception(
+            f"Failed to determine current IPv{version} address",
+            exc_info=last_exc,
+        )
+
+    return None
+
+
+def process_domain(
+    domain: str,
+    main_entry: str,
+    ipv4: Optional[IPv4Address],
+    ipv6: Optional[IPv6Address],
+    token: str,
+) -> None:
+    try:
+        dns_entries: list[dict] = transip_request_get(f"domains/{domain}/dns", token)[
+            "dnsEntries"
+        ]
+    except requests.RequestException:
+        logger.exception(f"Could not get current DNS config for {domain}")
+        return
+
+    # Find previously set IP addresses.
+    old_ipv4: Optional[IPv4Address] = None
+    old_ipv6: Optional[IPv6Address] = None
+
+    for entry in dns_entries:
+        if entry["name"] == main_entry:
+            if entry["type"] == "A":
+                old_ipv4 = IPv4Address(entry["content"])
+            elif entry["type"] == "AAAA":
+                old_ipv6 = IPv6Address(entry["content"])
+
+    if ipv4 and not old_ipv4:
+        logger.warning(f"Unable to determine previous IPv4 address for {domain}")
+
+    if ipv6 and not old_ipv6:
+        logger.warning(f"Unable to determine previous IPv6 address for {domain}")
+
+    # Determine what needs to be changed.
+    update_ipv4 = bool(old_ipv4 and ipv4 and old_ipv4 != ipv4)
+    update_ipv6 = bool(old_ipv6 and ipv6 and old_ipv6 != ipv6)
+
+    if not update_ipv4 and not update_ipv6:
+        logger.info(f"No changes required for {domain}")
+        return
+
+    if update_ipv4:
+        logger.info(f"Changing IPv4 address from {old_ipv4} to {ipv4} for {domain}")
+
+    if update_ipv6:
+        logger.info(f"Changing IPv6 address from {old_ipv6} to {ipv6} for {domain}")
+
+    # Update all DNS entries that have the found IP addresses.
+    for entry in dns_entries:
+        update = False
+        current_value: str = entry["content"]
+
+        if update_ipv4 and current_value == str(old_ipv4):
+            entry["content"] = str(ipv4)
+            update = True
+        elif update_ipv6 and current_value == str(old_ipv6):
+            entry["content"] = str(ipv6)
+            update = True
+
+        if update:
+            try:
+                transip_request_patch(
+                    f"domains/{domain}/dns", token, {"dnsEntry": entry}
+                )
+            except requests.RequestException:
+                logger.exception(
+                    f"Could not update DNS config for {domain} with {entry}"
+                )
+                continue
+
+
+def domain_name(value: str) -> tuple[str, str]:
+    items: list[str] = value.split(":")
+    if not len(items) == 2:
+        raise ValueError("Invalid domain name format.")
+    domain, name = items
+    return domain, name
+
+
+def get_domain_queue(domains: list[tuple[str, str]]) -> dict[str, str]:
+    queue: dict[str, str] = {}
+    for domain, main_entry in domains:
+        if domain in queue:
+            raise ValueError(
+                f"Duplicate domain {domain} specified. "
+                "Please specify only one main DNS entry name per domain."
+            )
+        queue[domain] = main_entry
+    return queue
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="transip-dyndns",
+        description="TransIP Dynamic DNS script.",
+    )
+    parser.add_argument(
+        "-l",
+        "--label",
+        metavar="LABEL",
+        default="transip-dyndns",
+        help=(
+            "Custom name for your access tokens. If you are going to have "
+            "multiple servers logging into the same TransIP account, also "
+            "make sure the value of LABEL is unique to avoid clashes."
+        ),
+    )
+    parser.add_argument(
+        "-u",
+        "--username",
+        metavar="USERNAME",
+        required=True,
+        help="Your TransIP login username.",
+    )
+    parser.add_argument(
+        "-k",
+        "--private-key",
+        type=argparse.FileType("r"),
+        metavar="PATH",
+        required=True,
+        help=(
+            "Path to a text file containing the private key. "
+            "To get a private key, you should first generate "
+            "a key pair using the TransIP control panel "
+            "(https://www.transip.nl/cp/account/api)."
+        ),
+    )
+    parser.add_argument(
+        "-4",
+        "--ipv4",
+        type=IPv4Address,
+        metavar="ADDRESS",
+        nargs="?",
+        const=IPV4_UNSPECIFIED,
+        default=None,
+        help=(
+            "Update the IPv4 address. If no address is specified, "
+            "it will be determined via an online service."
+        ),
+    )
+    parser.add_argument(
+        "-6",
+        "--ipv6",
+        type=IPv6Address,
+        metavar="ADDRESS",
+        nargs="?",
+        const=IPV6_UNSPECIFIED,
+        default=None,
+        help=(
+            "Update the IPv6 address. If no address is specified, "
+            "it will be determined via an online service."
+        ),
+    )
+    parser.add_argument(
+        "-d",
+        "--domain",
+        type=domain_name,
+        action="append",
+        metavar="DOMAIN:NAME",
+        required=True,
+        help=(
+            "Specify a domain for which to update the DNS records. "
+            "The domain must be followed by the main DNS entry name, "
+            "e.g. 'example.com:@' or 'example.com:www'. "
+            "This option can be repeated for different domains."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if not args.ipv4 and not args.ipv6:
+        parser.error("Please specify one of --ipv4 or --ipv6.")
+
+    try:
+        domain_queue = get_domain_queue(args.domain)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.ipv4 == IPV4_UNSPECIFIED:
+        logger.info("Determining IPv4 address...")
+        args.ipv4 = determine_ip_address(IPv4Address)
+
+    if args.ipv4:
+        logger.info(f"Your IPv4 address: {args.ipv4}")
+
+    if args.ipv6 == IPV6_UNSPECIFIED:
+        logger.info("Determining IPv6 address...")
+        args.ipv6 = determine_ip_address(IPv6Address)
+
+    if args.ipv6:
+        logger.info(f"Your IPv6 address: {args.ipv6}")
+
+    if not args.ipv4 and not args.ipv6:
+        logger.error("Failed to determine any current IP address")
+        sys.exit(1)
+
+    assert args.ipv4 != IPV4_UNSPECIFIED
+    assert args.ipv6 != IPV6_UNSPECIFIED
+
+    try:
+        token = get_access_token(args.label, args.username, args.private_key)
+    except requests.RequestException:
+        logger.error("Failed to get access token. Try again later.")
+        sys.exit(2)
+
+    for domain, main_entry in domain_queue.items():
+        process_domain(domain, main_entry, args.ipv4, args.ipv6, token)
 
 
 if __name__ == "__main__":
-    # Get IPv4 address.
-    try:
-        ipv4 = requests.get("https://v4.ident.me/", timeout=10.).text
-    except:
-        try:
-            ipv4 = requests.get("https://api4.ipify.org", timeout=10.).text
-        except:
-            print_message("WARNING: Unable to determine current IPv4 address.")
-            ipv4 = False
-    else:
-        if not IPV4_REGEX.match(ipv4):
-            print_message("WARNING: Invalid IPv4 address obtained: '%s'" % ipv4)
-            ipv4 = False
-
-    # Get IPv6 address.
-    ipv6 = False
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "online":
-            try:
-                ipv6 = requests.get("https://v6.ident.me/", timeout=10.).text
-            except:
-                try:
-                    ipv6 = requests.get("https://api6.ipify.org", timeout=10.).text
-                except:
-                    print_message("WARNING: Unable to determine current IPv6 address.")
-        else:
-            ipv6 = sys.argv[1]
-        if ipv6 and not IPV6_REGEX.match(ipv6):
-            print_message("WARNING: Invalid IPv6 address obtained: '%s'" % ipv6)
-            ipv6 = False
-
-    if not ipv4 and not ipv6:
-        print_message("ERROR: Could not determine any current IP address.")
-        sys.exit(1)
-
-    # Log into API.
-    try:
-        token = request_token()
-    except Exception as ex:
-        print_message("ERROR: Could not get auth token. %s" % format_exception(ex))
-        sys.exit(2)
-
-    for domain, main_entry in DOMAIN_MAIN_ENTRY.items():
-        # Get the current DNS entries from TransIP.
-        try:
-            dns = request_get("domains/%s/dns" % domain, token)["dnsEntries"]
-        except Exception as ex:
-            print_message("WARNING: Could not get current DNS config for %s. %s" % (domain, format_exception(ex)))
-            continue
-
-        # Find previously set IP addresses.
-        oldIPv4 = False
-        oldIPv6 = False
-        for entry in dns:
-            if entry["name"] == main_entry:
-                if entry["type"] == "A":
-                    oldIPv4 = entry["content"]
-                elif entry["type"] == "AAAA":
-                    oldIPv6 = entry["content"]
-        if ipv4 and not oldIPv4:
-            print_message("WARNING: Unable to determine previous IPv4 address for %s." % domain)
-        if ipv6 and not oldIPv6:
-            print_message("WARNING: Unable to determine previous IPv6 address for %s." % domain)
-
-        # Determine what needs to be changed.
-        updateIPv4 = oldIPv4 and ipv4 and oldIPv4 != ipv4
-        updateIPv6 = oldIPv6 and ipv6 and oldIPv6 != ipv6
-        if not updateIPv4 and not updateIPv6:
-            print_message("No changes required for %s." % domain)
-            continue
-        if updateIPv4:
-            print_message("Changing IPv4 address from %s to %s for %s." % (oldIPv4, ipv4, domain))
-        if updateIPv6:
-            print_message("Changing IPv4 address from %s to %s for %s." % (oldIPv6, ipv6, domain))
-
-        # Update all DNS entries that have the found IP addresses.
-        for entry in dns:
-            update = False
-            if updateIPv4 and entry["content"] == oldIPv4:
-                entry["content"] = ipv4
-                update = True
-            elif updateIPv6 and entry["content"] == oldIPv6:
-                entry["content"] = ipv6
-                update = True
-            if update:
-                try:
-                    request_patch("domains/%s/dns" % domain, token, {"dnsEntry": entry})
-                except Exception as ex:
-                    print_message("WARNING: Could not update DNS config for %s with %r. %s" % (domain, entry, format_exception(ex)))
-                    continue
+    logging.basicConfig(format=LOG_FORMAT, level=LOG_LEVEL)
+    main()

@@ -1,0 +1,18 @@
+[project]
+name = "transip-dyndns"
+version = "0.1.0"
+description = "Dynamic DNS updating script for TransIP API"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cryptography>=48.0.0",
+    "requests>=2.33.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "ruff>=0.15.12",
+    "types-cryptography>=3.3.23.2",
+    "types-requests>=2.33.0.20260503",
+]
