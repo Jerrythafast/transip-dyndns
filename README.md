@@ -8,7 +8,8 @@ amount of downtime when the address changes.
 
 
 ## Setting up the script
-1. Requirements: Python 3.x and the `cryptography` and `requests` packages (run: `pip install cryptography requests`).
+1. Requirements: Python 3.x and the 
+ `cryptography`, `requests` and `dotenv` packages (run: `pip install cryptography requests dotenv`).
 2. Go to the TransIP Control Panel at https://www.transip.nl/cp/account/api/ (Account > API) and enable
    the API. Add a key pair to generate a private key, this must be generated without the "whitelisted" option!
    (After change to un unknown dynamic ip, this new ip is not in the whitelist!)
