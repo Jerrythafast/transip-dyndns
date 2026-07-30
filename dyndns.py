@@ -1,12 +1,17 @@
 #!/usr/bin/env python
-PRIVATE_KEY = """
------BEGIN PRIVATE KEY-----
-copy-and-paste your private key here. don't forget to restrict access to this file!!!
------END PRIVATE KEY-----"""
-LOGIN = "username"
-LABEL = "DynDNS30s"
-TIMEOUT = 10.
-DOMAIN_MAIN_ENTRY = {"mydomain.nl": "*", "myseconddomain.nl": "@"}
+import json
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+LOGIN = os.getenv("LOGIN")
+LABEL = os.getenv("LABEL")
+TIMEOUT = float(os.getenv("TIMEOUT", "10"))
+
+DOMAIN_MAIN_ENTRY = json.loads(os.getenv("DOMAIN_MAIN_ENTRY"))
+
+PRIVATE_KEY = os.getenv("PRIVATE_KEY")
 
 
 # pip install cryptography requests
