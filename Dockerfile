@@ -6,4 +6,4 @@ RUN pip install cryptography requests python-dotenv
 
 COPY . ./
 
-ENTRYPOINT ["python3", "app.py"]
+ENTRYPOINT ["python3", "dyndns.py"]

@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  dyndns:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dyndns
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./transip.pem:/service/transip.pem
